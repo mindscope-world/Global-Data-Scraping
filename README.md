@@ -1,96 +1,59 @@
-# Global Data Scraping - World Disaster Center API
+# World Disaster Center API
 
-A FastAPI application that provides information about global disasters, funding appeals, and affected populations.
+A FastAPI application that provides real-time information about global disasters, funding appeals, and affected populations using AI-powered web crawling and structured data extraction.
+
+## Features
+
+- **Real-time Disaster Information**: Crawls and analyzes recent disaster reports from around the world
+- **Structured Data Extraction**: Uses AI to extract key information about:
+  - Disaster types and locations
+  - Affected populations and casualties
+  - Funding appeals and humanitarian response plans
+- **Multi-Region Coverage**: Implements 20 specialized search queries targeting diverse disaster types and regions
+- **Priority Source Handling**: Prioritizes authoritative humanitarian sources (UNOCHA, UNHCR, WHO, etc.)
+- **Comprehensive API Endpoints**:
+  - `/disasters/by_country/{country_name}`: Get recent disasters for a specific country
+  - `/funding/stats`: Get aggregated funding statistics from recent reports
+  - `/people/stats`: Get aggregated affected population statistics
+  - `/chat`: Conversational AI assistant for disaster information
 
 ## Prerequisites
 
-1. [Docker](https://docs.docker.com/get-docker/) installed locally
-2. [Google Cloud SDK](https://cloud.google.com/sdk/docs/install) installed
-3. A Google Cloud Platform project with billing enabled
-4. OpenAI API key
-5. Permissions to create resources in your Google Cloud project
+1. Python 3.8 or higher
+2. OpenAI API key
+3. (Optional) Docker for local containerization
 
-## Deployment to Google Cloud Run
-
-### Important: Enable Billing
-
-Before deploying, make sure billing is enabled for your project:
-- Visit https://console.cloud.google.com/billing/projects
-- Select your project and enable billing if not already enabled
-
-### Manual Deployment
+## Local Development
 
 1. Clone this repository and navigate to the project directory
 
-2. Update the configuration variables in `deploy.ps1` (Windows) or `deploy.sh` (Linux/MacOS):
-   ```
-   PROJECT_ID="your-gcp-project-id"
-   IMAGE_NAME="disaster-api"
-   REGION="us-central1"
-   SERVICE_NAME="disaster-api-service"
-   REPOSITORY="disaster-images"
+2. Create a virtual environment and activate it:
+   ```bash
+   python -m venv venv
+   # Windows
+   .\venv\Scripts\activate
+   # Linux/MacOS
+   source venv/bin/activate
    ```
 
-3. Make sure your OpenAI API key is in the `.env` file:
+3. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. Create a `.env` file with your OpenAI API key:
    ```
    OPENAI_API_KEY=your-openai-api-key
    ```
 
-4. Run the deployment script:
-   - Windows: `.\deploy.ps1`
-   - Linux/MacOS: `bash deploy.sh`
-
-### GitHub Actions Deployment
-
-To set up automatic deployments with GitHub Actions:
-
-1. Add the following secrets to your GitHub repository:
-   - `GCP_PROJECT_ID`: Your Google Cloud project ID
-   - `GCP_SA_KEY`: Service account key JSON (base64 encoded)
-   - `OPENAI_API_KEY`: Your OpenAI API key
-
-2. Create a service account in GCP with the following roles:
-   - Cloud Run Admin
-   - Storage Admin
-   - Artifact Registry Administrator
-   - Service Account User
-
-3. Create and download a JSON key for the service account
-
-4. Base64 encode the JSON key file:
-   - Windows: `[System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes((Get-Content -Raw -Path key.json)))`
-   - Linux/macOS: `cat key.json | base64`
-
-5. Add the encoded string as the `GCP_SA_KEY` secret in GitHub
-
-6. Push your code to the `main` branch, and GitHub Actions will handle the deployment
-
-## Troubleshooting
-
-If you encounter permission issues:
-1. Ensure you're logged in to gcloud with sufficient permissions
-2. Verify billing is enabled for your project
-3. Check IAM permissions for your user account or service account
-
-If the container fails to start on Cloud Run:
-1. Check logs in Google Cloud Console
-2. Verify the OPENAI_API_KEY environment variable is correctly set
-
-## Local Development
-
-1. Install dependencies:
-   ```
-   pip install -r requirements.txt
-   ```
-
-2. Run the FastAPI application:
-   ```
+5. Run the FastAPI application:
+   ```bash
    uvicorn app:app --reload
    ```
 
-3. Access the API documentation at http://localhost:8000/docs
+6. Access the API documentation at http://localhost:8000/docs
 
-## Building and Running with Docker Locally
+## Docker Deployment
 
 ```bash
 # Build the Docker image
@@ -101,3 +64,75 @@ docker run -p 8080:8080 -e OPENAI_API_KEY=your-openai-api-key disaster-api
 
 # Access the API at http://localhost:8080/docs
 ```
+
+## Deployment to Render
+
+The application is configured for deployment on Render using the provided `render.yaml`:
+
+1. Push your code to a Git repository (GitHub, GitLab, etc.)
+
+2. Create a new Web Service on Render:
+   - Connect your repository
+   - Select the Docker environment
+   - Add your environment variables:
+     ```
+     OPENAI_API_KEY=your-openai-api-key
+     ```
+
+3. Deploy! Render will automatically build and deploy your application
+
+## API Usage
+
+### Get Recent Disasters by Country
+```http
+GET /disasters/by_country/{country_name}
+```
+
+### Get Funding Statistics
+```http
+GET /funding/stats
+```
+
+### Get Affected People Statistics
+```http
+GET /people/stats
+```
+
+### Chat with Disaster Assistant
+```http
+POST /chat
+Content-Type: application/json
+
+{
+    "message": "What are the recent disasters in Japan?"
+}
+```
+
+## Data Quality and Limitations
+
+- Data is sampled from crawled web pages and may be incomplete
+- Statistics are not comprehensive global figures
+- Information accuracy depends on source availability and AI interpretation
+- Always verify critical information through official channels
+
+## Troubleshooting
+
+If you encounter issues:
+
+1. Check the application logs for error messages
+2. Verify your OpenAI API key is correctly set
+3. Ensure all required dependencies are installed
+4. Check for rate limiting issues from search providers
+5. Verify network connectivity for web crawling
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
