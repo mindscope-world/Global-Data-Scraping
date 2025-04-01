@@ -1,4 +1,4 @@
-# World Disaster Center API
+# Global Data Scraping - World Disaster Center API
 
 A FastAPI application that provides information about global disasters, funding appeals, and affected populations.
 
@@ -100,4 +100,4 @@ docker build -t disaster-api .
 docker run -p 8080:8080 -e OPENAI_API_KEY=your-openai-api-key disaster-api
 
 # Access the API at http://localhost:8080/docs
-``` 
+```
