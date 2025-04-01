@@ -43,33 +43,33 @@ app.add_middleware(
 openai_api_key = os.getenv("OPENAI_API_KEY")
 if not openai_api_key:
     logger.error("OPENAI_API_KEY environment variable not set.")
-    # You might want to exit or raise a configuration error here
-    # For now, we'll let it potentially fail later if used.
-
-# Configure httpx client for OpenAI, handling proxy if needed
-openai_http_client = None
-https_proxy = os.getenv("HTTPS_PROXY")
-if https_proxy:
-    logger.info(f"Using HTTPS proxy for OpenAI: {https_proxy}")
-    openai_http_client = httpx.AsyncClient(proxies=https_proxy, timeout=httpx.Timeout(45.0)) # Increased timeout for LLM calls
-else:
-    openai_http_client = httpx.AsyncClient(timeout=httpx.Timeout(45.0))
-
-# Use try-except block for client initialization as API key might be missing/invalid
-try:
-    client = AsyncOpenAI(
-        api_key=openai_api_key,
-        http_client=openai_http_client
-    )
-    # Optional: Test connection or list models if needed
-    # asyncio.run(client.models.list())
-    logger.info("AsyncOpenAI client initialized successfully.")
-except OpenAIError as e:
-    logger.error(f"Failed to initialize AsyncOpenAI client: {e}", exc_info=True)
-    client = None # Set client to None to indicate failure
-except Exception as e:
-    logger.error(f"An unexpected error occurred during OpenAI client initialization: {e}", exc_info=True)
+    # Define client as None but don't exit - let the app start but LLM features won't work
     client = None
+else:
+    # Configure httpx client for OpenAI, handling proxy if needed
+    openai_http_client = None
+    https_proxy = os.getenv("HTTPS_PROXY")
+    if https_proxy:
+        logger.info(f"Using HTTPS proxy for OpenAI: {https_proxy}")
+        openai_http_client = httpx.AsyncClient(proxies=https_proxy, timeout=httpx.Timeout(45.0)) # Increased timeout for LLM calls
+    else:
+        openai_http_client = httpx.AsyncClient(timeout=httpx.Timeout(45.0))
+
+    # Use try-except block for client initialization as API key might be missing/invalid
+    try:
+        client = AsyncOpenAI(
+            api_key=openai_api_key,
+            http_client=openai_http_client
+        )
+        # Optional: Test connection or list models if needed
+        # asyncio.run(client.models.list())
+        logger.info("AsyncOpenAI client initialized successfully.")
+    except OpenAIError as e:
+        logger.error(f"Failed to initialize AsyncOpenAI client: {e}", exc_info=True)
+        client = None # Set client to None to indicate failure
+    except Exception as e:
+        logger.error(f"An unexpected error occurred during OpenAI client initialization: {e}", exc_info=True)
+        client = None
 
 # --- Pydantic Models ---
 
@@ -130,6 +130,9 @@ class PeopleStatsInfo(BaseExtractionModel):
     injured_count: Optional[int] = Field(0, description="Number of people injured")
     displaced_count: Optional[int] = Field(0, description="Number of people displaced (IDPs, refugees)")
     report_date: Optional[str] = Field(None, description="Date the statistics were reported")
+    disaster_type: Optional[str] = Field(None, description="Type of disaster (e.g., earthquake, flood)")
+    summary: Optional[str] = Field(None, description="Brief summary of the situation")
+    title: Optional[str] = Field(None, description="Title of the report or webpage")
 
 # --- Models for API Responses ---
 
@@ -155,6 +158,9 @@ class LocationPeopleStats(BaseModel):
     casualties: int = 0
     injured: int = 0
     displaced: int = 0
+    disaster_type: Optional[str] = None
+    summary: Optional[str] = None
+    title: Optional[str] = None
 
 class PeopleStatsResponse(BaseStatsResponse):
     total_affected: int = 0
@@ -198,6 +204,10 @@ def enhanced_search(query: str, max_results: int = 10) -> list[dict]:
         if len(valid_results) != len(results):
              logger.warning(f"Filtered out {len(results) - len(valid_results)} search results missing 'link', 'title', or 'snippet'.")
         return valid_results
+    except ImportError:
+        logger.error(f"Search failed for query '{query}': Missing duckduckgo-search package. Please run 'pip install duckduckgo-search'")
+        # Return empty results rather than failing completely
+        return []
     except Exception as e:
         logger.error(f"Search failed for query '{query}': {e}", exc_info=True)
         return []
@@ -516,14 +526,14 @@ async def get_people_statistics():
     for recent disaster situation reports.
 
     Aggregates data ONLY from successfully crawled and processed pages.
-    Provides totals and a location breakdown.
+    Provides totals and a location breakdown with disaster type, summary, and title.
 
     **WARNING:** This provides sampled data based on recent web searches and LLM
     extraction, not a comprehensive global statistic. Figures can vary wildly
     between reports and may be estimates.
     """
     search_query = "recent disaster situation report casualty figures OR affected population numbers OR displacement statistics OR OCHA situation report population"
-    instruction_prompt = "You are an expert data extractor focused on humanitarian impact. Analyze the provided text from a webpage, typically a disaster situation report. Extract statistics about affected populations: specifically, the number of people affected, number of casualties (deaths), number of injured, and number of displaced people (IDPs or refugees). Also, identify the primary location (country/region) these figures refer to. Provide integer numbers for counts. If a figure is not mentioned, use 0."
+    instruction_prompt = "You are an expert data extractor focused on humanitarian impact. Analyze the provided text from a webpage, typically a disaster situation report. Extract statistics about affected populations: specifically, the number of people affected, number of casualties (deaths), number of injured, and number of displaced people (IDPs or refugees). Also, identify the primary location (country/region) these figures refer to, the disaster type, a brief summary of the situation, and the title of the report. Provide integer numbers for counts. If a figure is not mentioned, use 0."
 
     people_data_list, errors = await search_crawl_extract(
         search_query=search_query,
@@ -538,6 +548,7 @@ async def get_people_statistics():
         errors=errors,
     )
     location_stats = defaultdict(lambda: defaultdict(int)) # Nested defaultdict for easier summing
+    location_metadata = {} # Store disaster_type, summary, and title for each location
 
     for item in people_data_list:
         # Use getattr with default 0 to safely access potentially None fields
@@ -556,6 +567,22 @@ async def get_people_statistics():
         location_stats[loc]["casualties"] += cas
         location_stats[loc]["injured"] += inj
         location_stats[loc]["displaced"] += dis
+        
+        # Store metadata (only update if values are non-empty and we don't already have them)
+        if loc not in location_metadata:
+            location_metadata[loc] = {
+                "disaster_type": getattr(item, 'disaster_type', None),
+                "summary": getattr(item, 'summary', None),
+                "title": getattr(item, 'title', None)
+            }
+        else:
+            # If we already have this location but current item has data we're missing, update it
+            if not location_metadata[loc]["disaster_type"] and getattr(item, 'disaster_type', None):
+                location_metadata[loc]["disaster_type"] = getattr(item, 'disaster_type', None)
+            if not location_metadata[loc]["summary"] and getattr(item, 'summary', None):
+                location_metadata[loc]["summary"] = getattr(item, 'summary', None)
+            if not location_metadata[loc]["title"] and getattr(item, 'title', None):
+                location_metadata[loc]["title"] = getattr(item, 'title', None)
 
     # Convert defaultdicts back to regular dicts for the response model
     stats.by_location = {
@@ -563,7 +590,10 @@ async def get_people_statistics():
             affected=v["affected"],
             casualties=v["casualties"],
             injured=v["injured"],
-            displaced=v["displaced"]
+            displaced=v["displaced"],
+            disaster_type=location_metadata.get(k, {}).get("disaster_type"),
+            summary=location_metadata.get(k, {}).get("summary"),
+            title=location_metadata.get(k, {}).get("title")
         ) for k, v in location_stats.items()
     }
 
