@@ -1,0 +1,78 @@
+// disasters.json
+[
+    {
+        "id": "eq_jpn_2011",
+        "name": "Tōhoku Earthquake and Tsunami",
+        "type": "Earthquake/Tsunami",
+        "location": "Japan",
+        "summary": "A magnitude 9.0 earthquake followed by a devastating tsunami.",
+        "date": "2011-03-11",
+        "affected_people": 500000,
+        "casualties": 19759,
+        "funding_requested": 1500000000,
+        "funding_received": 1350000000,
+        "organizations_involved": ["Japanese Red Cross", "UN OCHA", "Save the Children"],
+        "source": "OCHA",
+        "source_url": "https://reports.unocha.org/en/country/japan/"
+    },
+    {
+        "id": "hu_hti_2010",
+        "name": "Haiti Earthquake",
+        "type": "Earthquake",
+        "location": "Haiti",
+        "summary": "A catastrophic magnitude 7.0 earthquake struck near Port-au-Prince.",
+        "date": "2010-01-12",
+        "affected_people": 3000000,
+        "casualties": 220000,
+        "funding_requested": 1400000000,
+        "funding_received": 1300000000,
+        "organizations_involved": ["IFRC", "MSF", "American Red Cross", "UNICEF"],
+        "source": "IFRC",
+        "source_url": "https://www.ifrc.org/haiti"
+    },
+     {
+        "id": "cy_moz_2019",
+        "name": "Cyclone Idai",
+        "type": "Cyclone",
+        "location": "Mozambique",
+        "summary": "One of the worst tropical cyclones on record to affect Africa and the Southern Hemisphere.",
+        "date": "2019-03-04",
+        "affected_people": 1850000,
+        "casualties": 1303,
+        "funding_requested": 600000000,
+        "funding_received": 450000000,
+        "organizations_involved": ["WFP", "UNICEF", "Mozambique Red Cross"],
+        "source": "WFP",
+        "source_url": "https://www.wfp.org/emergencies/cyclone-idai"
+    },
+    {
+        "id": "fl_pak_2022",
+        "name": "Pakistan Floods",
+        "type": "Flood",
+        "location": "Pakistan",
+        "summary": "Severe monsoon rains caused widespread flooding across Pakistan.",
+        "date": "2022-06-14",
+        "affected_people": 33000000,
+        "casualties": 1739,
+        "funding_requested": 816000000,
+        "funding_received": 350000000,
+        "organizations_involved": ["NDMA Pakistan", "UN OCHA", "IFRC"],
+        "source": "NDMA",
+        "source_url": "https://www.ndma.gov.pk/"
+    },
+    {
+        "id": "eq_jpn_2024",
+        "name": "Noto Peninsula Earthquake",
+        "type": "Earthquake",
+        "location": "Japan",
+        "summary": "Magnitude 7.5 earthquake affecting the Noto Peninsula.",
+        "date": "2024-01-01",
+        "affected_people": 100000,
+        "casualties": 241,
+        "funding_requested": 50000000,
+        "funding_received": 20000000,
+        "organizations_involved": ["Japanese Red Cross", "Local Govt"],
+        "source": "Govt Japan",
+        "source_url": "https://www.gov-online.go.jp/noto-jishin/"
+    }
+]
