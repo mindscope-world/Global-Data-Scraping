@@ -51,7 +51,7 @@ else:
     https_proxy = os.getenv("HTTPS_PROXY")
     if https_proxy:
         logger.info(f"Using HTTPS proxy for OpenAI: {https_proxy}")
-        openai_http_client = httpx.AsyncClient(proxies=https_proxy, timeout=httpx.Timeout(45.0)) # Increased timeout for LLM calls
+        openai_http_client = httpx.AsyncClient(proxy=https_proxy, timeout=httpx.Timeout(45.0)) # Increased timeout for LLM calls
     else:
         openai_http_client = httpx.AsyncClient(timeout=httpx.Timeout(45.0))
 
@@ -119,7 +119,7 @@ class FundingInfo(BaseExtractionModel):
     funding_gap: Optional[float] = Field(0.0, description="Calculated funding gap (requested - received)")
     percentage_funded: Optional[float] = Field(0.0, description="Funding received as a percentage of requested")
     location: Optional[str] = Field("Unknown Location", description="Country or region the funding pertains to")
-    organizations_involved: Optional[List[str]] = Field(default_factory=list, description="Organizations mentioned in the appeal/report")
+    organizations_involved: Optional[List[str]] = Field([], description="Organizations mentioned in the appeal/report")
     appeal_name: Optional[str] = Field(None, description="Name of the funding appeal or plan, if mentioned")
     report_date: Optional[str] = Field(None, description="Date of the funding report or appeal")
 
@@ -195,14 +195,43 @@ def enhanced_search(query: str, max_results: int = 10) -> list[dict]:
     """Performs a web search using DuckDuckGoSearchAPIWrapper."""
     logger.info(f"Performing search for: '{query}' (max_results={max_results})")
     try:
-        # Use 'd' for day, 'w' for week, 'm' for month, or None for any time
+        # Try to force more recent results by adding date qualifiers if not present
+        if "recent" not in query.lower() and "2024" not in query and "2025" not in query:
+            query = f"recent {query} 2024 OR 2025"
+            
+        # Use 'w' for week to get more recent results for disaster information
         search = DuckDuckGoSearchAPIWrapper(region="wt-wt", time="w", max_results=max_results)
         results = search.results(query, max_results=max_results)
         logger.info(f"Search returned {len(results)} results.")
+        
         # Ensure results have 'link' key
         valid_results = [r for r in results if isinstance(r, dict) and 'link' in r and 'title' in r and 'snippet' in r]
         if len(valid_results) != len(results):
              logger.warning(f"Filtered out {len(results) - len(valid_results)} search results missing 'link', 'title', or 'snippet'.")
+             
+        # For disaster searches, prioritize sites that tend to have good disaster information
+        if "disaster" in query.lower() or "casualties" in query.lower() or "affected" in query.lower():
+            # Define priority domains for disaster information
+            priority_domains = ["reliefweb.int", "unocha.org", "who.int", "unhcr.org", "unicef.org", 
+                               "ifrc.org", "redcross.org", "fema.gov", "usaid.gov", "worldvision.org", 
+                               "savethechildren.org", "care.org", "wfp.org"]
+            
+            # Reorder results to put priority domains first
+            priority_results = []
+            other_results = []
+            
+            for result in valid_results:
+                url = result.get('link', '').lower()
+                is_priority = any(domain in url for domain in priority_domains)
+                if is_priority:
+                    priority_results.append(result)
+                else:
+                    other_results.append(result)
+                    
+            reordered_results = priority_results + other_results
+            logger.info(f"Reordered search results: {len(priority_results)} priority sources, {len(other_results)} other sources")
+            return reordered_results
+        
         return valid_results
     except ImportError:
         logger.error(f"Search failed for query '{query}': Missing duckduckgo-search package. Please run 'pip install duckduckgo-search'")
@@ -269,7 +298,10 @@ async def extract_structured_data_llm(
     model_to_use = "gpt-4-1106-preview" # Or "gpt-3.5-turbo-1106" or newer models supporting JSON mode
     logger.info(f"Attempting structured extraction from {url} using model {model_to_use}")
     logger.debug(f"Extraction instruction: {instruction_prompt}")
-    # logger.debug(f"Output schema: {output_model.model_json_schema()}") # Can be verbose
+    
+    # For PeopleStatsInfo, add specific focus on disasters
+    if output_model.__name__ == "PeopleStatsInfo":
+        instruction_prompt += "\n\nFOCUS ON DISASTERS: Look specifically for information about natural disasters (earthquakes, floods, etc.) or humanitarian crises. Even if the impact numbers are estimates or ranges, extract them. Always include the disaster type and a title if you can find them."
 
     try:
         response = await client.chat.completions.create(
@@ -318,16 +350,17 @@ async def search_crawl_extract(
     search_query: str,
     output_model: type[BaseModel],
     instruction_prompt: str,
-    max_search_results: int = 5, # Limit search results to manage cost/time
-    max_concurrent_fetches: int = 3 # Limit concurrent fetches
-) -> tuple[List[BaseModel], Dict[str, str]]:
+    max_search_results: int = 5,  # Default limit for search results
+    max_concurrent_fetches: int = 5, # Default concurrent fetches
+    timeout: int = 30  # Increased timeout for disaster-related content
+) -> tuple[List[Any], Dict[str, str]]:
     """
     Core workflow: Search -> Fetch URL Content -> Extract Structured Data.
     Returns a list of successfully extracted data objects and a dict of errors.
     """
     search_results = enhanced_search(search_query, max_results=max_search_results)
     extracted_data_list = []
-    errors = {}
+    errors: Dict[str, str] = {}  # Type annotation added
     urls_to_process = [r['link'] for r in search_results if r.get('link')]
 
     if not urls_to_process:
@@ -346,10 +379,31 @@ async def search_crawl_extract(
                 errors[url_str] = "Invalid URL format"
                 return None
 
-            content = await fetch_url_content(str(url)) # Fetch needs string
+            # For PeopleStatsInfo, use a longer timeout since we're looking for disaster data
+            fetch_timeout = timeout if output_model.__name__ == "PeopleStatsInfo" else 20
+            
+            content = await fetch_url_content(str(url), timeout=fetch_timeout) # Fetch needs string
             if content:
                 extracted = await extract_structured_data_llm(content, url, output_model, instruction_prompt)
                 if extracted:
+                    # For PeopleStatsInfo, ensure we have disaster information
+                    if output_model.__name__ == "PeopleStatsInfo":
+                        disaster_type = getattr(extracted, 'disaster_type', None)
+                        # If no disaster type but we have affected people, try to guess a generic crisis type
+                        if not disaster_type and (getattr(extracted, 'affected_count', 0) > 0 or 
+                                                  getattr(extracted, 'casualty_count', 0) > 0 or
+                                                  getattr(extracted, 'displaced_count', 0) > 0):
+                            if 'gaza' in search_query.lower() or 'palestine' in search_query.lower():
+                                extracted.disaster_type = "Conflict/Humanitarian Crisis"
+                            elif 'flood' in search_query.lower():
+                                extracted.disaster_type = "Flooding"
+                            elif 'earthquake' in search_query.lower():
+                                extracted.disaster_type = "Earthquake"
+                            elif 'hurricane' in search_query.lower() or 'typhoon' in search_query.lower():
+                                extracted.disaster_type = "Hurricane/Typhoon"
+                            else:
+                                extracted.disaster_type = "Humanitarian Crisis"
+                    
                     return extracted
                 else:
                     errors[str(url)] = "Failed to extract structured data (LLM error or no data found)"
@@ -371,7 +425,6 @@ async def search_crawl_extract(
                  errors[url] = f"Unhandled exception during processing: {type(result).__name__}"
         elif result: # If result is not None and not an Exception
             extracted_data_list.append(result)
-        # No need for else, errors are logged and added within process_url
 
     logger.info(f"Extraction summary for '{search_query}': {len(extracted_data_list)} successes, {len(errors)} failures out of {len(urls_to_process)} URLs.")
 
@@ -438,9 +491,10 @@ async def get_disasters_by_country(
 
     response = DisasterListResponse(
         country=country_name,
-        disasters_found=disaster_data_list,
-        source_urls_processed=[d.source_url for d in disaster_data_list if d.source_url],
+        disasters_found=[d for d in disaster_data_list if isinstance(d, DisasterInfo)],
+        source_urls_processed=[d.source_url for d in disaster_data_list if hasattr(d, 'source_url') and d.source_url],
         errors=errors,
+        warning="WARNING: Data is sampled from crawled web pages and may be incomplete or inaccurate. Not a comprehensive global statistic. Verify critical information."
     )
     return response
 
@@ -523,7 +577,7 @@ async def get_people_statistics():
     """
     Attempts to crawl & extract affected people data (affected counts,
     casualties, displacement figures) from web pages found via a general search
-    for recent disaster situation reports.
+    for recent disaster situation reports across multiple locations.
 
     Aggregates data ONLY from successfully crawled and processed pages.
     Provides totals and a location breakdown with disaster type, summary, and title.
@@ -532,25 +586,67 @@ async def get_people_statistics():
     extraction, not a comprehensive global statistic. Figures can vary wildly
     between reports and may be estimates.
     """
-    search_query = "recent disaster situation report casualty figures OR affected population numbers OR displacement statistics OR OCHA situation report population"
-    instruction_prompt = "You are an expert data extractor focused on humanitarian impact. Analyze the provided text from a webpage, typically a disaster situation report. Extract statistics about affected populations: specifically, the number of people affected, number of casualties (deaths), number of injured, and number of displaced people (IDPs or refugees). Also, identify the primary location (country/region) these figures refer to, the disaster type, a brief summary of the situation, and the title of the report. Provide integer numbers for counts. If a figure is not mentioned, use 0."
+    # Create multiple search queries for different regions to ensure geographical diversity
+    search_queries = [
+        "recent Gaza Palestine conflict casualties displaced humanitarian emergency",
+        "recent flooding disaster Bangladesh India Thailand casualties affected population",
+        "recent earthquake disaster Turkey Syria Iran casualties displaced people",
+        "recent hurricane disaster Caribbean Florida Haiti casualties affected victims",
+        "recent wildfire disaster California Australia Canada casualties displaced evacuation",
+        "recent drought disaster Somalia Kenya Ethiopia affected hunger population",
+        "recent typhoon disaster Japan Philippines Taiwan casualties affected destroyed",
+        "recent volcanic eruption Indonesia Philippines casualties displaced evacuation",
+        "recent tsunami disaster Japan Indonesia casualties affected missing",
+        "recent landslide disaster Nepal India Brazil casualties affected homeless",
+        "recent cyclone disaster Madagascar Mozambique affected population displaced",
+        "recent winter storm disaster Europe Ukraine casualties affected frozen",
+        "recent famine disaster South Sudan Yemen affected population malnutrition",
+        "recent heatwave disaster India Pakistan casualties affected victims",
+        "recent tornado disaster United States casualties affected homes destroyed",
+        "recent monsoon flooding Bangladesh Pakistan casualties affected displaced",
+        "recent refugee crisis Syria Turkey Jordan Lebanon total affected living conditions",
+        "recent war Ukraine casualties affected displaced people",
+        "recent infrastructure collapse disaster casualties affected recovery efforts",
+        "recent industrial disaster chemical spill explosion casualties affected evacuation"
+    ]
+    
+    instruction_prompt = """You are an expert data extractor focused on humanitarian impact. Analyze the provided text from a webpage, typically a disaster situation report. 
 
-    people_data_list, errors = await search_crawl_extract(
-        search_query=search_query,
-        output_model=PeopleStatsInfo,
-        instruction_prompt=instruction_prompt,
-        max_search_results=10 # More results for broader stats
-    )
+Extract the following information:
+1. The number of people affected, casualties (deaths), injured, and displaced people (IDPs or refugees)
+2. The primary location (country/region) these figures refer to - be as specific as possible
+3. The specific disaster type (e.g., earthquake, flood, conflict, hurricane)
+4. A brief summary of the situation (1-2 sentences)
+5. The title of the report or article
 
+IMPORTANT: Always extract the disaster type and title even if population numbers are not available. Provide integer numbers for counts. If a figure is not mentioned, use 0."""
+
+    # Process each search query
+    all_people_data = []
+    all_errors = {}
+    
+    # Process each search query with fewer results per query but more queries total
+    for search_query in search_queries:
+        logger.info(f"Processing search query: {search_query}")
+        people_data_list, errors = await search_crawl_extract(
+            search_query=search_query,
+            output_model=PeopleStatsInfo,
+            instruction_prompt=instruction_prompt,
+            max_search_results=5,  # 5 results per query x 10 queries = ~50 total results
+            max_concurrent_fetches=5
+        )
+        all_people_data.extend(people_data_list)
+        all_errors.update(errors)
+    
     # --- Aggregation Logic ---
     stats = PeopleStatsResponse(
-        source_urls_processed=[p.source_url for p in people_data_list if p.source_url],
-        errors=errors,
+        source_urls_processed=[p.source_url for p in all_people_data if p.source_url],
+        errors=all_errors,
     )
     location_stats = defaultdict(lambda: defaultdict(int)) # Nested defaultdict for easier summing
     location_metadata = {} # Store disaster_type, summary, and title for each location
 
-    for item in people_data_list:
+    for item in all_people_data:
         # Use getattr with default 0 to safely access potentially None fields
         aff = getattr(item, 'affected_count', 0) or 0
         cas = getattr(item, 'casualty_count', 0) or 0
@@ -575,7 +671,7 @@ async def get_people_statistics():
                 "summary": getattr(item, 'summary', None),
                 "title": getattr(item, 'title', None)
             }
-        else:
+        elif any(not location_metadata[loc][key] for key in ["disaster_type", "summary", "title"]):
             # If we already have this location but current item has data we're missing, update it
             if not location_metadata[loc]["disaster_type"] and getattr(item, 'disaster_type', None):
                 location_metadata[loc]["disaster_type"] = getattr(item, 'disaster_type', None)
